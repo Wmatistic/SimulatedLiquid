@@ -16,6 +16,7 @@ public class DrawingCircle : MonoBehaviour
     public Rigidbody[] rb;
     public Vector2[] velocities;
     public Vector2[] positions;
+    private Vector2[] predictedPositions;
     private int numOfParticles;
     public float particleSpacing;
 
@@ -24,8 +25,9 @@ public class DrawingCircle : MonoBehaviour
 
     private uint[] spatialLookup;
     private int[] startIndices;
-    
-    public Vector2 boundsSize = new Vector2(11, 11);
+    private int[,] cellOffsets;
+
+    public Vector2 boundsSize;
     public float particleSize = 1f;
     public float collisionDamping = 0.7f;
     public float smoothingRadius;
@@ -33,7 +35,8 @@ public class DrawingCircle : MonoBehaviour
     public float targetDensity;
     public float pressureMultiplier;
     private float[] densities;
-    const float mass = 10;
+    const float mass = 1;
+    public float gravity;
 
     // Start is called before the first frame update
     void Start()
@@ -41,7 +44,12 @@ public class DrawingCircle : MonoBehaviour
         rb = new Rigidbody[tempCircles.Length];
         velocities = new Vector2[tempCircles.Length];
         positions = new Vector2[tempCircles.Length];
+        predictedPositions = new Vector2[tempCircles.Length];
         densities = new float[tempCircles.Length];
+
+        cellOffsets = new int[1, (int)boundsSize.x];
+
+        radius = smoothingRadius;
 
         numOfParticles = tempCircles.Length;
 
@@ -49,16 +57,19 @@ public class DrawingCircle : MonoBehaviour
         int particlesPerCol = (numOfParticles - 1) / particlesPerRow + 1;
         float spacing = particleSize * 2 + particleSpacing;
         
-        for (int i = 0; i < tempCircles.Length; i++)
+        for (int i = 0; i < numOfParticles; i++)
         {
             float x = (i % particlesPerRow - particlesPerRow / 2f + 0.5f) * spacing;
             float y = (i / particlesPerRow - particlesPerCol / 2f + 0.5f) * spacing;
-            
+
+            Debug.Log(i);
             tempCircles[i] = Instantiate(particle, new Vector3(x, y, 0), Quaternion.identity);
             
             rb[i] = tempCircles[i].GetComponent<Rigidbody>();
             velocities[i] = tempCircles[i].GetComponent<Rigidbody>().velocity;
             positions[i] = tempCircles[i].GetComponent<Transform>().position;
+            
+            //points[i] = positions[i];
         }
     }
 
@@ -71,19 +82,26 @@ public class DrawingCircle : MonoBehaviour
             tempCircles[i].transform.position = positions[i];
             rb[i].velocity = velocities[i];
         }
-
-        //UpdateSpatialLookup();
     }
 
     void SimulationStep(float deltaTime)
     {
-        // Apply gravity and calculate densities
+        // Apply gravity and predict next positions
         Parallel.For(0, numOfParticles, i =>
         {
-            //velocities[i] += Vector2.down * mass * deltaTime;
-            densities[i] = CalculateDensity(positions[i]);
+            velocities[i] += Vector2.down * gravity * deltaTime;
+            predictedPositions[i] = positions[i] + velocities[i] * deltaTime;
         });
         
+        // Update spatial lookup with predicted positions
+        //UpdateSpatialLookup(predictedPositions, smoothingRadius);
+
+        // Calculate densities
+        Parallel.For(0, numOfParticles, i =>
+        {
+            densities[i] = CalculateDensity(predictedPositions[i]);
+        });
+
         //Calculate and apply pressure forces
         Parallel.For((long)0, numOfParticles, i =>
         {
@@ -100,10 +118,12 @@ public class DrawingCircle : MonoBehaviour
         });
     }
 
-    // public void ForeachPointWithinRadius(Vector2 samplePoint)
+    // public List<int> ForeachPointWithinRadius(Vector2 samplePoint)
     // {
-    //     (int centreX, int centreY) = PositionToCellCoord(sameplPoint, radius);
+    //     (int centreX, int centreY) = PositionToCellCord(samplePoint, radius);
     //     float sqrRadius = radius * radius;
+    //
+    //     List<int> output = new List<int>();
     //
     //     foreach ((int offsetX, int offsetY) in cellOffsets)
     //     {
@@ -119,15 +139,19 @@ public class DrawingCircle : MonoBehaviour
     //
     //             if (sqrDst <= sqrRadius)
     //             {
-    //                 
+    //                 output.Add(particleIndex);
     //             }
     //         }
     //         
     //     }
+    //
+    //     return output;
     // }
-
-    // public void UpdateSpatialLookup()
+    //
+    // public void UpdateSpatialLookup(Vector2[] points, float radius)
     // {
+    //     this.points = points;
+    //     this.radius = radius;
     //
     //     Parallel.For((long)0, points.Length, i => 
     //     {
@@ -170,15 +194,19 @@ public class DrawingCircle : MonoBehaviour
     //     return hash % (uint)spatialLookup.Length;
     // }
 
+
+    
     Vector2 CalculatePressureForce(int particleIndex)
     {
         Vector2 pressureForce = Vector2.zero;
+
+        //List<int> particlesWithinRadius = new List<int>(ForeachPointWithinRadius(positions[particleIndex]));
 
         for (int i = 0; i < numOfParticles; i++)
         {
             if (particleIndex == i) continue;
 
-            Vector2 offset = positions[i] - positions[particleIndex];
+            Vector2 offset = predictedPositions[i] - predictedPositions[particleIndex];
             float dst = offset.magnitude;
             Vector2 dir = dst == 0 ? new Vector2(0, 1) : offset / dst;
             

@@ -31,6 +31,7 @@ public class DrawingCircle : MonoBehaviour
     public float particleSize = 1f;
     public float collisionDamping = 0.7f;
     public float smoothingRadius;
+    public float viscosityStrength;
 
     public float targetDensity;
     public float pressureMultiplier;
@@ -102,11 +103,11 @@ public class DrawingCircle : MonoBehaviour
             densities[i] = CalculateDensity(predictedPositions[i]);
         });
 
-        //Calculate and apply pressure forces
+        //Calculate, apply pressure forces, and apply viscosity
         Parallel.For((long)0, numOfParticles, i =>
         {
             Vector2 pressureForce = CalculatePressureForce((int)i);
-            Vector2 pressureAcceleration = pressureForce / densities[i];
+            Vector2 pressureAcceleration = pressureForce / densities[i] + CalculateViscosityForce((int)i);
             velocities[i] += pressureAcceleration * deltaTime;
         });
         
@@ -194,8 +195,21 @@ public class DrawingCircle : MonoBehaviour
     //     return hash % (uint)spatialLookup.Length;
     // }
 
+    Vector2 CalculateViscosityForce(int particleIndex)
+    {
+        Vector2 viscosityForce = Vector2.zero;
+        Vector2 position = positions[particleIndex];
 
-    
+        for (int i = 0; i < numOfParticles; i++)
+        {
+            float dst = (position - positions[i]).magnitude;
+            float influence = ViscositySmoothingKernel(dst, smoothingRadius);
+            viscosityForce += (velocities[i] - velocities[particleIndex]) * influence;
+        }
+
+        return viscosityForce * viscosityStrength;
+    }
+
     Vector2 CalculatePressureForce(int particleIndex)
     {
         Vector2 pressureForce = Vector2.zero;
@@ -251,6 +265,14 @@ public class DrawingCircle : MonoBehaviour
         }
 
         return density;
+    }
+
+    float ViscositySmoothingKernel(float dst, float radius)
+    {
+        if (dst >= radius) return 0;
+
+        float value = Mathf.Max(0, radius * radius - dst * dst);
+        return value * value * value;
     }
 
     float SmoothingKernel(float dst, float radius)

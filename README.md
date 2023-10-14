@@ -4,4 +4,6 @@
 
 ## TODO:
 1. ~~Extrapolate collision detection from empty GameObject and add it into script on the particle prefab~~
-2. Optimize runtime speed to allow for more particles
+2. Optimize runtime speed to allow for more particles (partially finished)
+3. ~~Implement predictive position equation for calculating density / pressure~~
+4. ~~Implement viscosity~~

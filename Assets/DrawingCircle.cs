@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Unity.Burst.Intrinsics;
 using Unity.Mathematics;
 using Unity.VisualScripting;
 using UnityEngine;
@@ -25,7 +26,7 @@ public class DrawingCircle : MonoBehaviour
 
     private uint[] spatialLookup;
     private int[] startIndices;
-    private int[,] cellOffsets;
+    private Vector2[] cellOffsets;
 
     public Vector2 boundsSize;
     public float particleSize = 1f;
@@ -45,10 +46,14 @@ public class DrawingCircle : MonoBehaviour
         rb = new Rigidbody[tempCircles.Length];
         velocities = new Vector2[tempCircles.Length];
         positions = new Vector2[tempCircles.Length];
+        points = new Vector2[tempCircles.Length];
         predictedPositions = new Vector2[tempCircles.Length];
+        spatialLookup = new uint[tempCircles.Length];
+        startIndices = new int[tempCircles.Length];
         densities = new float[tempCircles.Length];
 
-        cellOffsets = new int[1, (int)boundsSize.x];
+        cellOffsets = new Vector2[9];
+        CreateCellOffset();
 
         radius = smoothingRadius;
 
@@ -62,15 +67,13 @@ public class DrawingCircle : MonoBehaviour
         {
             float x = (i % particlesPerRow - particlesPerRow / 2f + 0.5f) * spacing;
             float y = (i / particlesPerRow - particlesPerCol / 2f + 0.5f) * spacing;
-
-            Debug.Log(i);
+            
             tempCircles[i] = Instantiate(particle, new Vector3(x, y, 0), Quaternion.identity);
             
             rb[i] = tempCircles[i].GetComponent<Rigidbody>();
             velocities[i] = tempCircles[i].GetComponent<Rigidbody>().velocity;
             positions[i] = tempCircles[i].GetComponent<Transform>().position;
-            
-            //points[i] = positions[i];
+            predictedPositions[i] = positions[i];
         }
     }
 
@@ -85,6 +88,19 @@ public class DrawingCircle : MonoBehaviour
         }
     }
 
+    private void CreateCellOffset()
+    {
+        cellOffsets[0] = new Vector2(-1, 1);
+        cellOffsets[1] = new Vector2(0, 1);
+        cellOffsets[2] = new Vector2(1, 1);
+        cellOffsets[3] = new Vector2(-1, 0);
+        cellOffsets[4] = new Vector2(0, 0);
+        cellOffsets[5] = new Vector2(1, 0);
+        cellOffsets[6] = new Vector2(-1, -1);
+        cellOffsets[7] = new Vector2(0, -1);
+        cellOffsets[8] = new Vector2(1, -1);
+    }
+
     void SimulationStep(float deltaTime)
     {
         // Apply gravity and predict next positions
@@ -95,7 +111,7 @@ public class DrawingCircle : MonoBehaviour
         });
         
         // Update spatial lookup with predicted positions
-        //UpdateSpatialLookup(predictedPositions, smoothingRadius);
+        UpdateSpatialLookup(predictedPositions, smoothingRadius);
 
         // Calculate densities
         Parallel.For(0, numOfParticles, i =>
@@ -119,81 +135,82 @@ public class DrawingCircle : MonoBehaviour
         });
     }
 
-    // public List<int> ForeachPointWithinRadius(Vector2 samplePoint)
-    // {
-    //     (int centreX, int centreY) = PositionToCellCord(samplePoint, radius);
-    //     float sqrRadius = radius * radius;
-    //
-    //     List<int> output = new List<int>();
-    //
-    //     foreach ((int offsetX, int offsetY) in cellOffsets)
-    //     {
-    //         uint key = GetKeyFromHash(HashCell(centreX + offsetX, centreY + offsetY));
-    //         int cellStartIndex = startIndices[key];
-    //
-    //         for (int i = cellStartIndex; i < spatialLookup.Length; i++)
-    //         {
-    //             if (spatialLookup[i] != key) break;
-    //
-    //             int particleIndex = i;
-    //             float sqrDst = (points[particleIndex] - samplePoint).sqrMagnitude;
-    //
-    //             if (sqrDst <= sqrRadius)
-    //             {
-    //                 output.Add(particleIndex);
-    //             }
-    //         }
-    //         
-    //     }
-    //
-    //     return output;
-    // }
-    //
-    // public void UpdateSpatialLookup(Vector2[] points, float radius)
-    // {
-    //     this.points = points;
-    //     this.radius = radius;
-    //
-    //     Parallel.For((long)0, points.Length, i => 
-    //     {
-    //             (int cellX, int cellY) = PositionToCellCord(points[i], radius);
-    //             uint cellKey = GetKeyFromHash(HashCell(cellX, cellY));
-    //             spatialLookup[i] = cellKey ;
-    //             startIndices[i] = int.MaxValue; 
-    //     });
-    //     
-    //     Array.Sort(spatialLookup);
-    //
-    //     Parallel.For((long)0, points.Length, i =>
-    //     {
-    //             uint key = spatialLookup[i];
-    //             uint keyPrev = i == 0 ? uint.MaxValue : spatialLookup[i - 1];
-    //             if (key != keyPrev)
-    //             {
-    //                 startIndices[key] = (int)i;
-    //             }
-    //     });
-    // }
-    //
-    // public (int x, int y) PositionToCellCord(Vector2 point, float radius)
-    // {
-    //     int cellX = (int)(point.x / radius);
-    //     int cellY = (int)(point.y / radius);
-    //
-    //     return (cellX, cellY);
-    // }
-    //
-    // public uint HashCell(int cellX, int cellY)
-    // {
-    //     uint a = (uint)cellX * 15823;
-    //     uint b = (uint)cellY * 9737333;
-    //     return a + b;
-    // }
-    //
-    // public uint GetKeyFromHash(uint hash)
-    // {
-    //     return hash % (uint)spatialLookup.Length;
-    // }
+    List<int> GetNeighbors(Vector2 samplePoint)
+    {
+        (int centreX, int centreY) = PositionToCellCord(samplePoint, radius);
+        float sqrRadius = radius * radius;
+    
+        List<int> output = new List<int>();
+    
+        foreach (Vector2 offset in cellOffsets)
+        {
+            uint key = GetKeyFromHash(HashCell(centreX + (int)offset.x, centreY + (int)offset.y));
+            int cellStartIndex = startIndices[key];
+    
+            for (int i = cellStartIndex; i < spatialLookup.Length; i++)
+            {
+                if (spatialLookup[i] != key) break;
+    
+                int particleIndex = i;
+                float sqrDst = (points[particleIndex] - samplePoint).sqrMagnitude;
+    
+                if (sqrDst <= sqrRadius)
+                {
+                    output.Add(particleIndex);
+                }
+            }
+            
+        }
+    
+        return output;
+    }
+    
+    uint HashCell(int cellX, int cellY)
+    {
+        uint a = (uint)cellX * 15823;
+        uint b = (uint)cellY * 9737333;
+        return a + b;
+    }
+    
+    uint GetKeyFromHash(uint hash)
+    {
+        return hash % (uint)spatialLookup.Length;
+    }
+    
+    void UpdateSpatialLookup(Vector2[] points, float radius)
+    {
+        this.points = points;
+        this.radius = radius;
+    
+        Parallel.For((long)0, points.Length, i => 
+        {
+                (int cellX, int cellY) = PositionToCellCord(points[i], radius);
+                uint cellKey = HashCell(cellX, cellY);
+                cellKey = GetKeyFromHash(cellKey);
+                spatialLookup[i] = cellKey;
+                startIndices[i] = int.MaxValue; 
+        });
+        
+        Array.Sort(spatialLookup);
+    
+        Parallel.For((long)0, points.Length, i =>
+        {
+                uint key = spatialLookup[i];
+                uint keyPrev = i == 0 ? uint.MaxValue : spatialLookup[i - 1];
+                if (key != keyPrev)
+                {
+                    startIndices[key] = (int)i;
+                }
+        });
+    }
+    
+    (int x, int y) PositionToCellCord(Vector2 point, float radius)
+    {
+        int cellX = (int)(point.x / radius);
+        int cellY = (int)(point.y / radius);
+    
+        return (cellX, cellY);
+    }
 
     Vector2 CalculateViscosityForce(int particleIndex)
     {
@@ -214,7 +231,7 @@ public class DrawingCircle : MonoBehaviour
     {
         Vector2 pressureForce = Vector2.zero;
 
-        //List<int> particlesWithinRadius = new List<int>(ForeachPointWithinRadius(positions[particleIndex]));
+        List<int> particlesWithinRadius = new List<int>(GetNeighbors(positions[particleIndex]));
 
         for (int i = 0; i < numOfParticles; i++)
         {
@@ -222,7 +239,7 @@ public class DrawingCircle : MonoBehaviour
 
             Vector2 offset = predictedPositions[i] - predictedPositions[particleIndex];
             float dst = offset.magnitude;
-            Vector2 dir = dst == 0 ? new Vector2(0, 1) : offset / dst;
+            Vector2 dir = dst == 0 ? new Vector2(0, 10) : offset / dst;
             
             float slope = SmoothingKernelDerivative(dst, smoothingRadius);
             float density = densities[i];
